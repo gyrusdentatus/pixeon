@@ -13,7 +13,6 @@ from cryptoutils import (
     encrypt_message,
     decrypt_message,
     sign_message,
-    verify_signature,
 )
 from imageutils import (
     image_to_bytes,
@@ -29,43 +28,70 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from nacl import public, encoding
+from cryptography.hazmat.primitives import serialization
 
 console = Console()
 
+# Define the CLI group
+@click.group()
+def cli():
+    pass
+
 # Functions for loading public keys from different sources
 def load_public_key_from_path(filepath):
-    """
-    Load a public key from a specified file path.
-    """
     filepath = os.path.expanduser(filepath)
     with open(filepath, 'rb') as f:
         key_data = f.read()
-    return public.PublicKey(key_data, encoder=encoding.Base64Encoder)
+    public_key = serialization.load_pem_public_key(
+        key_data,
+        backend=None
+    )
+    return public_key
 
 def load_public_key_from_data(key_data):
-    """
-    Load a public key from a string.
-    """
     key_data = key_data.encode()
-    return public.PublicKey(key_data, encoder=encoding.Base64Encoder)
+    public_key = serialization.load_ssh_public_key(
+        key_data,
+        backend=None
+    )
+    return public_key
 
 def load_public_key_from_url(url):
-    """
-    Download and load a public key from a URL.
-    """
     try:
         response = requests.get(url)
         response.raise_for_status()
         key_data = response.content
-        return public.PublicKey(key_data, encoder=encoding.Base64Encoder)
+        public_key = serialization.load_ssh_public_key(
+            key_data,
+            backend=None
+        )
+        return public_key
     except requests.exceptions.RequestException as e:
         console.print(f"[red]Failed to download key: {e}[/]")
         raise e
 
-@click.group()
-def cli():
-    pass
+def load_public_key_from_github(username):
+    url = f"https://github.com/{username}.keys"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        keys_data = response.text.strip().split('\n')
+        # Parse keys and look for an RSA key
+        for key_line in keys_data:
+            if key_line.startswith('ssh-rsa'):
+                key_data = key_line.strip()
+                public_key = serialization.load_ssh_public_key(
+                    key_data.encode(),
+                    backend=None
+                )
+                return public_key
+        raise ValueError("No RSA public key found for this GitHub user.")
+    except requests.exceptions.RequestException as e:
+        console.print(f"[red]Failed to fetch keys from GitHub: {e}[/]")
+        raise e
+    except Exception as e:
+        console.print(f"[red]Error processing GitHub keys: {e}[/]")
+        raise e
 
 @cli.command()
 def generate_keys():
@@ -119,7 +145,8 @@ def hide(image_path):
     console.print("2. Enter path to key file")
     console.print("3. Enter URL to download key")
     console.print("4. Paste key manually")
-    choice = Prompt.ask("[bold cyan]Choose an option[/]", choices=["1", "2", "3", "4"], default="1")
+    console.print("5. Enter GitHub username")
+    choice = Prompt.ask("[bold cyan]Choose an option[/]", choices=["1", "2", "3", "4", "5"], default="1")
 
     try:
         if choice == "1":
@@ -149,11 +176,15 @@ def hide(image_path):
             # Paste key manually
             key_data = Prompt.ask("[bold cyan]Paste the recipient's public key[/]")
             recipient_public_key = load_public_key_from_data(key_data)
+        elif choice == "5":
+            # Enter GitHub username
+            github_username = Prompt.ask("[bold cyan]Enter the recipient's GitHub username[/]")
+            recipient_public_key = load_public_key_from_github(github_username)
         else:
             console.print("[red]Invalid choice.[/]")
             return
     except ValueError:
-        console.print("[red]Invalid choice.[/]")
+        console.print("[red]ERR:Invalid choice.[/]")
         return
     except Exception as e:
         console.print(f"[red]Failed to load recipient's public key: {e}[/]")
@@ -178,7 +209,7 @@ def hide(image_path):
     output_image = f"hidden_{os.path.basename(image_path)}"
     modified_img = bytes_to_image(modified_image_bytes, img.mode)
     modified_img.save(output_image)
-    console.print(f"[green]Message hidden successfully in [bold]{output_image}[/][/]")
+    console.print(f"[green]Message hidden successfully in [bold]{output_image}[/]")
 
 @cli.command()
 @click.argument('image_path')
@@ -293,25 +324,16 @@ def reveal(image_path):
 
 # Additional functions for loading verify keys from different sources
 def load_verify_key_from_path(filepath):
-    """
-    Load a verify key from a specified file path.
-    """
     filepath = os.path.expanduser(filepath)
     with open(filepath, 'rb') as f:
         key_data = f.read()
     return public.VerifyKey(key_data, encoder=encoding.Base64Encoder)
 
 def load_verify_key_from_data(key_data):
-    """
-    Load a verify key from a string.
-    """
     key_data = key_data.encode()
     return public.VerifyKey(key_data, encoder=encoding.Base64Encoder)
 
 def load_verify_key_from_url(url):
-    """
-    Download and load a verify key from a URL.
-    """
     try:
         response = requests.get(url)
         response.raise_for_status()
