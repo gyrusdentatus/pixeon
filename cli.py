@@ -22,13 +22,46 @@ from imageutils import (
     extract_message,
 )
 import os
+import requests  # Import requests for handling URLs
 from rich import print
 from rich.prompt import Prompt
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
+from nacl import public, encoding
+
 console = Console()
+
+# Functions for loading public keys from different sources
+def load_public_key_from_path(filepath):
+    """
+    Load a public key from a specified file path.
+    """
+    filepath = os.path.expanduser(filepath)
+    with open(filepath, 'rb') as f:
+        key_data = f.read()
+    return public.PublicKey(key_data, encoder=encoding.Base64Encoder)
+
+def load_public_key_from_data(key_data):
+    """
+    Load a public key from a string.
+    """
+    key_data = key_data.encode()
+    return public.PublicKey(key_data, encoder=encoding.Base64Encoder)
+
+def load_public_key_from_url(url):
+    """
+    Download and load a public key from a URL.
+    """
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        key_data = response.content
+        return public.PublicKey(key_data, encoder=encoding.Base64Encoder)
+    except requests.exceptions.RequestException as e:
+        console.print(f"[red]Failed to download key: {e}[/]")
+        raise e
 
 @click.group()
 def cli():
@@ -77,22 +110,54 @@ def hide(image_path):
         console.print("[red]Invalid choice.[/]")
         return
 
-    # Select recipient's key
-    console.print("[bold cyan]Select recipient's key:[/]")
-    console.print(table)
-    choice = Prompt.ask("[bold cyan]Enter the number of the recipient's key[/]", default="1")
+    # Load your signing key
+    signing_key = load_signing_key(my_key_name)
+
+    # Recipient's public key selection
+    console.print("[bold cyan]Recipient's public key:[/]")
+    console.print("1. Select from existing keys")
+    console.print("2. Enter path to key file")
+    console.print("3. Enter URL to download key")
+    console.print("4. Paste key manually")
+    choice = Prompt.ask("[bold cyan]Choose an option[/]", choices=["1", "2", "3", "4"], default="1")
+
     try:
-        choice = int(choice)
-        if choice < 1 or choice > len(key_dirs):
-            raise ValueError()
-        recipient_key_name = key_dirs[choice - 1]
+        if choice == "1":
+            # Select from existing keys
+            console.print("[bold cyan]Select recipient's key:[/]")
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Number", style="dim", width=6)
+            table.add_column("Key Name", style="bold")
+            for idx, key_name in enumerate(key_dirs):
+                table.add_row(str(idx + 1), key_name)
+            console.print(table)
+            recipient_choice = Prompt.ask("[bold cyan]Enter the number of the recipient's key[/]", default="1")
+            recipient_choice = int(recipient_choice)
+            if recipient_choice < 1 or recipient_choice > len(key_dirs):
+                raise ValueError()
+            recipient_key_name = key_dirs[recipient_choice - 1]
+            recipient_public_key = load_public_key(recipient_key_name)
+        elif choice == "2":
+            # Enter path to key file
+            key_path = Prompt.ask("[bold cyan]Enter the path to the recipient's public key file[/]")
+            recipient_public_key = load_public_key_from_path(key_path)
+        elif choice == "3":
+            # Enter URL to download key
+            key_url = Prompt.ask("[bold cyan]Enter the URL of the recipient's public key[/]")
+            recipient_public_key = load_public_key_from_url(key_url)
+        elif choice == "4":
+            # Paste key manually
+            key_data = Prompt.ask("[bold cyan]Paste the recipient's public key[/]")
+            recipient_public_key = load_public_key_from_data(key_data)
+        else:
+            console.print("[red]Invalid choice.[/]")
+            return
     except ValueError:
         console.print("[red]Invalid choice.[/]")
         return
-
-    # Load keys
-    signing_key = load_signing_key(my_key_name)
-    recipient_public_key = load_public_key(recipient_key_name)
+    except Exception as e:
+        console.print(f"[red]Failed to load recipient's public key: {e}[/]")
+        return
 
     # Prompt for the message
     message = Prompt.ask("[bold cyan]Enter the message to hide[/]")
@@ -114,6 +179,7 @@ def hide(image_path):
     modified_img = bytes_to_image(modified_image_bytes, img.mode)
     modified_img.save(output_image)
     console.print(f"[green]Message hidden successfully in [bold]{output_image}[/][/]")
+
 @cli.command()
 @click.argument('image_path')
 def reveal(image_path):
@@ -149,22 +215,54 @@ def reveal(image_path):
         console.print("[red]Invalid choice.[/]")
         return
 
-    # Select sender's key
-    console.print("[bold cyan]Select sender's key:[/]")
-    console.print(table)
-    choice = Prompt.ask("[bold cyan]Enter the number of the sender's key[/]", default="1")
+    # Load your private key
+    private_key = load_private_key(my_key_name)
+
+    # Sender's verify key selection
+    console.print("[bold cyan]Sender's verify key:[/]")
+    console.print("1. Select from existing keys")
+    console.print("2. Enter path to key file")
+    console.print("3. Enter URL to download key")
+    console.print("4. Paste key manually")
+    choice = Prompt.ask("[bold cyan]Choose an option[/]", choices=["1", "2", "3", "4"], default="1")
+
     try:
-        choice = int(choice)
-        if choice < 1 or choice > len(key_dirs):
-            raise ValueError()
-        sender_key_name = key_dirs[choice - 1]
+        if choice == "1":
+            # Select from existing keys
+            console.print("[bold cyan]Select sender's key:[/]")
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Number", style="dim", width=6)
+            table.add_column("Key Name", style="bold")
+            for idx, key_name in enumerate(key_dirs):
+                table.add_row(str(idx + 1), key_name)
+            console.print(table)
+            sender_choice = Prompt.ask("[bold cyan]Enter the number of the sender's key[/]", default="1")
+            sender_choice = int(sender_choice)
+            if sender_choice < 1 or sender_choice > len(key_dirs):
+                raise ValueError()
+            sender_key_name = key_dirs[sender_choice - 1]
+            sender_verify_key = load_verify_key(sender_key_name)
+        elif choice == "2":
+            # Enter path to key file
+            key_path = Prompt.ask("[bold cyan]Enter the path to the sender's verify key file[/]")
+            sender_verify_key = load_verify_key_from_path(key_path)
+        elif choice == "3":
+            # Enter URL to download key
+            key_url = Prompt.ask("[bold cyan]Enter the URL of the sender's verify key[/]")
+            sender_verify_key = load_verify_key_from_url(key_url)
+        elif choice == "4":
+            # Paste key manually
+            key_data = Prompt.ask("[bold cyan]Paste the sender's verify key[/]")
+            sender_verify_key = load_verify_key_from_data(key_data)
+        else:
+            console.print("[red]Invalid choice.[/]")
+            return
     except ValueError:
         console.print("[red]Invalid choice.[/]")
         return
-
-    # Load keys
-    private_key = load_private_key(my_key_name)
-    sender_verify_key = load_verify_key(sender_key_name)
+    except Exception as e:
+        console.print(f"[red]Failed to load sender's verify key: {e}[/]")
+        return
 
     # Load image and extract message
     image_bytes, img = image_to_bytes(image_path)
@@ -193,3 +291,35 @@ def reveal(image_path):
     except Exception as e:
         console.print(f"[red]Failed to decrypt message: {e}[/]")
 
+# Additional functions for loading verify keys from different sources
+def load_verify_key_from_path(filepath):
+    """
+    Load a verify key from a specified file path.
+    """
+    filepath = os.path.expanduser(filepath)
+    with open(filepath, 'rb') as f:
+        key_data = f.read()
+    return public.VerifyKey(key_data, encoder=encoding.Base64Encoder)
+
+def load_verify_key_from_data(key_data):
+    """
+    Load a verify key from a string.
+    """
+    key_data = key_data.encode()
+    return public.VerifyKey(key_data, encoder=encoding.Base64Encoder)
+
+def load_verify_key_from_url(url):
+    """
+    Download and load a verify key from a URL.
+    """
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        key_data = response.content
+        return public.VerifyKey(key_data, encoder=encoding.Base64Encoder)
+    except requests.exceptions.RequestException as e:
+        console.print(f"[red]Failed to download key: {e}[/]")
+        raise e
+
+if __name__ == '__main__':
+    cli()
